@@ -24,7 +24,7 @@
 
 /* --- VARIABLES DE CONFIGURATION --- */
 const SCRIPT_VERSION = "V5.0.1"; /* (V5.0.1) */
-const EMAIL_POUR_RAPPORT = "g@alsteens.net";
+const EMAIL_POUR_RAPPORT = "toto@hotmail.com";
 const CHEMIN_DOSSIER = "script/doublondrive";
 const NOM_DOSSIER_ORPHELINS = "FICHIER ORPHELIN";
 const NOM_SHEET_DB = `[DB] Hashes Fichiers Drive`;
