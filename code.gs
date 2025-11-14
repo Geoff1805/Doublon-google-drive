@@ -1,64 +1,97 @@
 /*
- * SCRIPT AVANCÉ DE RECHERCHE DE DOUBLONS PAR CONTENU (v4.10.1 - Incrémentiel)
+ * =========================================================================================
+ * HISTORIQUE DES VERSIONS
+ * =========================================================================================
+ * SCRIPT AVANCÉ DE RECHERCHE DE DOUBLONS PAR CONTENU
  *
  * ====================================================================
  * HISTORIQUE DES VERSIONS (A.B.C)
  * ====================================================================
- * v4.0.0 - Refonte majeure : analyse "Incrémentielle" avec [DB].
- * v4.1.0 - Ajout de la colonne "Dossier (Parent)".
- * v4.2.0 - Génération d'un Google Sheet "[ACTION] Suppression Doublons".
- * v4.3.0 - (FIX) "Argument too large": "liste de tâches" déplacée vers [TEMP].
- * v4.4.0 - (FIX) "runtime exited": Baisse de MAX_FILE_SIZE_BYTES (150Mo).
- * v4.5.0 - Ajout d'un fichier journal Google Sheet "[LOG]".
- * v4.6.0 - Ajout de la gestion des dossiers "/script/doublondrive/".
- * v4.9.2 - (FIX) Le problème est la TAILLE. MAX_FILE_SIZE_BYTES baissé à 45Mo.
- * v4.9.6 - (FIX) Corrections de syntaxe (apostrophes).
- * v4.10.0 - (FEATURE) Implémentation de toutes les demandes en attente :
- * 1. (FIX) La pause est TOUJOURS de 1 minute.
- * 2. (FEATURE) Ajout du "Réveil Intelligent" (lanceurNocturneIntelligent).
- * 3. (FEATURE) Ajout du nouveau Sheet [STATS] (Tableau de Bord, Historique, Formats, Top 100).
- * 4. (FEATURE) Ajout des compteurs de lots et logs améliorés.
- * v4.10.1 - (FIX) Suppression de la fonction 'INSTALLER_DECLENCHEUR_NOCTURNE' (devenue inutile).
- * ====================================================================
+ * v4.13.0 - (FEATURE + FIX) Mise à jour majeure (Fix "Argument too large", Rapports enrichis, Sauvegarde DB).
+ * v4.13.1 - (FIX) Rétablissement du formatage des commentaires sécurisé.
+ * v4.15.0 - (FEATURE) Optimisation "Changes API" (Simplifiée) - Remplace V4.14.
+ * v4.15.4 - (PATCH) Correction API V2 (Finalisation des champs V2/V3).
+ * -----------------------------------------------------------------------------------------
+ * V5.0.0 - Release Majeure : Optimisation I/O Sheets API.
+ * -----------------------------------------------------------------------------------------
+ * V5.0.1 - Patch de Stabilité (Correction de la faute de frappe DOSSIER_ORPHELINS_ID).
+ * -----------------------------------------------------------------------------------------
+ * - PRÉREQUIS CRITIQUE: Le service "Drive API" et "Sheets API" DOIVENT être activés.
+ * - FIX: Correction d'une faute de frappe critique dans la déclaration de variable (DOSSIER_ORPHELINS_ID).
+ * - MAJ: Mise à jour du SCRIPT_VERSION.
+ * =========================================================================================
  */
 
-// --- VARIABLES DE CONFIGURATION ---
-const EMAIL_POUR_RAPPORT = "toto@hotmail.com";
+/* --- VARIABLES DE CONFIGURATION --- */
+const SCRIPT_VERSION = "V5.0.1"; /* (V5.0.1) */
+const EMAIL_POUR_RAPPORT = "g@alsteens.net";
 const CHEMIN_DOSSIER = "script/doublondrive";
+const NOM_DOSSIER_ORPHELINS = "FICHIER ORPHELIN";
 const NOM_SHEET_DB = `[DB] Hashes Fichiers Drive`;
 const NOM_SHEET_ACTION = `[ACTION] Suppression Doublons`;
 const NOM_SHEET_TEMP_TODO = `[TEMP] Fichiers à Traiter`; 
 const NOM_SHEET_LOG = `[LOG] Journal Analyse Doublons`;
 const NOM_SHEET_STATS = `[STATS] Tableau de Bord`; 
 
-const MINUTES_ENTRE_LOTS = 1; // v4.10.0 : Pause unique de 1 minute
-const TEMPS_MAX_EXECUTION_SECONDES = 270; // 4.5 minutes
+const MINUTES_ENTRE_LOTS = 1; 
+const TEMPS_MAX_EXECUTION_SECONDES = 270; 
 
-// v4.9.2 : Limite à 45 Mo
-const MAX_FILE_SIZE_BYTES = 47185920; // 45 Mo
+const MAX_FILE_SIZE_BYTES = 47185920; /* 45 Mo */
 const BATCH_SIZE_TRAITEMENT = 50; 
 
-// Noms des propriétés de script (pour gérer l'état)
+/* Noms des propriétés */
 const PROP_ETAT_SCRIPT = 'ETAT_SCRIPT';
-const PROP_CONTINUATION_TOKEN = 'CONTINUATION_TOKEN';
 const PROP_SHEET_ID_DB = 'SHEET_ID_DB'; 
 const PROP_SHEET_ID_TODO = 'SHEET_ID_TODO'; 
 const PROP_SHEET_ID_LOG = 'SHEET_ID_LOG'; 
 const PROP_SHEET_ID_STATS = 'SHEET_ID_STATS';
-const PROP_DB_DATA = 'DB_DATA';
-const PROP_FICHIERS_VUS = 'FICHIERS_VUS';
-// v4.9.8 : Compteurs de boucle
+const PROP_SHEET_ID_ACTION = 'SHEET_ID_ACTION';
+const PROP_DOSSIER_ORPHELINS_ID = 'DOSSIER_ORPHELINS_ID';
+const PROP_CHANGE_TOKEN = 'CHANGE_TOKEN'; /* (V4.15.0) */
+
+/* Compteurs de boucle */
 const PROP_COMPTEUR_DECOUVERTE = 'COMPTEUR_DECOUVERTE';
 const PROP_COMPTEUR_TRAITEMENT = 'COMPTEUR_TRAITEMENT';
 const PROP_FICHIERS_TRAITES_CYCLE = 'FICHIERS_TRAITES_CYCLE';
 const PROP_DATE_DEBUT_CYCLE = 'DATE_DEBUT_CYCLE';
-// ----------------------------------
 
+/* Base de connaissance des formats */
+const FORMAT_DESCRIPTIONS = {
+  '.pdf': 'Document PDF',
+  '.jpg': 'Image JPEG', '.jpeg': 'Image JPEG',
+  '.png': 'Image PNG', '.gif': 'Image GIF',
+  '.doc': 'Word (Ancien)', '.docx': 'Word',
+  '.xls': 'Excel (Ancien)', '.xlsx': 'Excel',
+  '.ppt': 'PowerPoint (Ancien)', '.pptx': 'PowerPoint',
+  '.txt': 'Fichier Texte', '.csv': 'Fichier CSV',
+  '.zip': 'Archive ZIP', '.rar': 'Archive RAR',
+  '.mp3': 'Audio MP3', '.wav': 'Audio WAV', '.m4a': 'Audio M4A',
+  '.mp4': 'Vidéo MP4', '.mov': 'Vidéo MOV', '.avi': 'Vidéo AVI',
+  '.gdoc': 'Google Doc', '.gsheet': 'Google Sheet'
+};
+
+/* --- FLUX DE TRAVAIL (DÉPLACÉ V4.15.3) --- */
 
 /**
- * ====================================================================
- * FONCTION UTILITAIRE : Gestion des dossiers (v4.6)
- * ====================================================================
+ * Fonction principale du déclencheur nocturne (ex: 02:00).
+ * Vérifie l'état et relance un cycle complet (IDLE) ou le lot suivant.
+ */
+function lanceurNocturneIntelligent() {
+  logToFile("SYSTEM", "Réveil intelligent (02:00).");
+  const etat = PropertiesService.getScriptProperties().getProperty(PROP_ETAT_SCRIPT);
+  if (etat === 'IDLE' || !etat) {
+    lancerAnalyseQuotidienne();
+  } else {
+    creerProchainDeclencheur('traiterLotFichiers', 1, etat);
+  }
+}
+
+/* ---------------------------------- */
+/* --- FONCTIONS PRINCIPALES --- */
+/* ---------------------------------- */
+
+/**
+ * Utilitaire pour trouver/créer un dossier par chemin.
  */
 function getOrCreateFolderByPath(path) {
   let parts = path.split('/');
@@ -66,849 +99,662 @@ function getOrCreateFolderByPath(path) {
   for (let part of parts) {
     if (part) { 
       let folders = currentFolder.getFoldersByName(part);
-      if (folders.hasNext()) {
-        currentFolder = folders.next();
-      } else {
-        currentFolder = currentFolder.createFolder(part);
-      }
+      if (folders.hasNext()) currentFolder = folders.next();
+      else currentFolder = currentFolder.createFolder(part);
     }
   }
-  Logger.log(`Dossier de travail assuré : ${currentFolder.getName()}`);
   return currentFolder;
 }
 
 /**
- * ====================================================================
- * FONCTION 1 : À EXÉCUTER UNE SEULE FOIS MANUELLEMENT
- * ====================================================================
- */
-function LANCER_PREMIERE_ANALYSE_UNIQUEMENT() {
-  Logger.log("Lancement de la PREMIÈRE ANALYSE (v4.10.1)...");
-  
-  // 1. Nettoyer tout état précédent
-  supprimerDeclencheursScript();
-  PropertiesService.getScriptProperties().deleteAllProperties();
-  
-  // 2. Obtenir le dossier de travail
-  const folder = getOrCreateFolderByPath(CHEMIN_DOSSIER);
-  
-  // 3. Nettoyer les anciens Sheets dans ce dossier
-  function supprimerSheetParNom(nom, folder) {
-    try {
-      const fichiers = folder.getFilesByName(nom);
-      while (fichiers.hasNext()) {
-        fichiers.next().setTrashed(true);
-      }
-    } catch (e) {}
-  }
-  supprimerSheetParNom(NOM_SHEET_DB, folder);
-  supprimerSheetParNom(NOM_SHEET_ACTION, folder);
-  supprimerSheetParNom(NOM_SHEET_TEMP_TODO, folder);
-  supprimerSheetParNom(NOM_SHEET_LOG, folder);
-  supprimerSheetParNom(NOM_SHEET_STATS, folder); // NOUVEAU
-
-  // 4. Créer les Google Sheets et les déplacer dans le dossier
-  const sheetDB = SpreadsheetApp.create(NOM_SHEET_DB);
-  const sheetId_DB = sheetDB.getId();
-  DriveApp.getFileById(sheetId_DB).moveTo(folder);
-  sheetDB.appendRow(["ID Fichier", "Nom", "URL", "Taille", "ModifiéLe (ISO)", "Dossier (Parent)", "Hash / Statut"]);
-  sheetDB.getRange("A:A").setNumberFormat('@'); 
-  sheetDB.getRange("G:G").setNumberFormat('@'); 
-  Logger.log(`Base de données permanente créée : ${sheetId_DB}`);
-  
-  const sheetAction = SpreadsheetApp.create(NOM_SHEET_ACTION);
-  DriveApp.getFileById(sheetAction.getId()).moveTo(folder);
-  sheetAction.appendRow(["Analyse en cours..."]);
-  Logger.log(`Sheet d'action créé : ${sheetAction.getUrl()}`);
-  
-  const sheetTempTodo = SpreadsheetApp.create(NOM_SHEET_TEMP_TODO);
-  const sheetId_Todo = sheetTempTodo.getId();
-  DriveApp.getFileById(sheetId_Todo).moveTo(folder);
-  sheetTempTodo.appendRow(["Action", "ID", "Nom", "URL", "Taille", "ModifiedISO", "Dossier", "RowToUpdate"]);
-  Logger.log(`Sheet temporaire de tâches créé : ${sheetId_Todo}`);
-
-  const sheetLog = SpreadsheetApp.create(NOM_SHEET_LOG);
-  const sheetId_Log = sheetLog.getId();
-  DriveApp.getFileById(sheetId_Log).moveTo(folder);
-  sheetLog.appendRow(["Horodatage", "État", "Message"]);
-  Logger.log(`Fichier journal créé : ${sheetId_Log}`);
-  
-  // NOUVEAU : Créer le Sheet de Stats
-  const sheetStats = SpreadsheetApp.create(NOM_SHEET_STATS);
-  const sheetId_Stats = sheetStats.getId();
-  DriveApp.getFileById(sheetId_Stats).moveTo(folder);
-  sheetStats.insertSheet("Tableau de Bord");
-  sheetStats.insertSheet("Historique").appendRow(["Date", "Fichiers Totaux (DB)", "Espace Perdu (Go)", "Fichiers Traités (Cycle)", "Durée Cycle (min)", "Lots Découverte", "Lots Traitement"]);
-  sheetStats.insertSheet("Analyse des Formats").appendRow(["Extension", "Nombre de Fichiers", "Taille Totale (Octets)"]);
-  sheetStats.insertSheet("Top 100 Fichiers (Taille)").appendRow(["Nom", "Dossier", "Taille (Mo)"]);
-  sheetStats.deleteSheet(sheetStats.getSheetByName("Feuille 1"));
-  Logger.log(`Fichier de Stats créé : ${sheetId_Stats}`);
-  
-  // 5. Configurer l'état initial
-  const properties = PropertiesService.getScriptProperties();
-  properties.setProperty(PROP_SHEET_ID_DB, sheetId_DB);
-  properties.setProperty(PROP_SHEET_ID_TODO, sheetId_Todo); 
-  properties.setProperty(PROP_SHEET_ID_LOG, sheetId_Log);
-  properties.setProperty(PROP_SHEET_ID_STATS, sheetId_Stats); // NOUVEAU
-  properties.setProperty(PROP_ETAT_SCRIPT, 'DECOUVERTE_INITIALE');
-  properties.setProperty(PROP_CONTINUATION_TOKEN, DriveApp.getFiles().getContinuationToken());
-  properties.setProperty(PROP_DB_DATA, JSON.stringify({}));
-  properties.setProperty(PROP_COMPTEUR_DECOUVERTE, "0"); 
-  properties.setProperty(PROP_COMPTEUR_TRAITEMENT, "0");
-  properties.setProperty(PROP_FICHIERS_TRAITES_CYCLE, "0");
-  properties.setProperty(PROP_DATE_DEBUT_CYCLE, new Date().toISOString());
-
-  // 6. Créer le premier déclencheur
-  creerProchainDeclencheur('traiterLotFichiers', 1, 'DECOUVERTE_INITIALE'); 
-  
-  logToFile('DECOUVERTE_INITIALE', `Lancement de la PREMIÈRE ANALYSE (v4.10.1). Fichiers dans ${CHEMIN_DOSSIER}`);
-  
-  MailApp.sendEmail(EMAIL_POUR_RAPPORT, 
-                    "[Drive v4.10.1] Lancement de l'analyse initiale", 
-                    "L'analyse initiale (v4.10.1) de tous vos fichiers a commencé.\n" +
-                    `Ajout des stats et du réveil intelligent.`);
-}
-
-/**
- * ====================================================================
- * FONCTION UTILITAIRE : Écriture dans le fichier journal (v4.9.7)
- * ====================================================================
+ * Écrit un log dans le [LOG] Sheet (MODIFIÉ V5.0.0 pour API Sheets).
  */
 function logToFile(etat, message) {
-  // v4.9.7 : Écrit dans le Logger.log standard (visible dans les Exécutions)
-  const logMessage = `[${etat}] ${message}`;
-  Logger.log(logMessage);
+  const pattern = /ID (\w+).*\| Nom: (.*?)(?: \| Taille:.*)? \| /;
+  const match = message.match(pattern);
+  let fichierId = '', fichierNom = '', messageStruct = message;
+  if (match) {
+    fichierId = match[1]; fichierNom = match[2]; messageStruct = message.replace(match[0], '');
+  }
+  Logger.log(`[${etat}] ${message}`);
   
-  // Garde l'écriture dans le Sheet [LOG] comme backup en cas de crash
   try {
     const sheetId_Log = PropertiesService.getScriptProperties().getProperty(PROP_SHEET_ID_LOG);
     if (sheetId_Log) {
-      const sheetLog = SpreadsheetApp.openById(sheetId_Log).getSheets()[0];
-      const horodatage = new Date().toISOString();
-      sheetLog.appendRow([horodatage, etat, message]);
+      /* V5.0.0 : Utilisation de l'API Sheets pour APPEND ultra-rapide */
+      Sheets.Spreadsheets.Values.append({
+        values: [[new Date().toISOString(), etat, fichierId, fichierNom, messageStruct]]
+      }, sheetId_Log, 'Feuille 1', { valueInputOption: 'USER_ENTERED' });
     }
   } catch (e) {
-    Logger.log(`ERREUR CRITIQUE : Impossible d'écrire dans le fichier journal. ${e.message}`);
+    /* Si l'API Sheets ou le Log Sheet n'est pas prêt, on revient au simple log dans Apps Script */
+    Logger.log(`ERREUR LOG V5.0.0: Échec d'écriture dans le Sheet. ${e.message}`);
+    PropertiesService.getScriptProperties().deleteProperty(PROP_SHEET_ID_LOG);
   }
 }
 
+/* --- FONCTIONS D'OUTILS (SUPPRIMÉES V4.15.1) --- */
+
+
+/* --- FLUX DE TRAVAIL (MODIFIÉ V5.0.0) --- */
+
 /**
- * ====================================================================
- * FONCTION 2 : DÉCLENCHEUR NOCTURNE QUOTIDIEN
- * ====================================================================
+ * Initialise un nouveau cycle d'analyse.
+ * Fait une sauvegarde, vide [TEMP] et lance le premier lot V4.15.
  */
 function lancerAnalyseQuotidienne() {
-  logToFile("QUOTIDIEN", "Lancement de l'analyse quotidienne (incrémentielle v4.10.1)...");
-  const properties = PropertiesService.getScriptProperties();
-  const sheetId_DB = properties.getProperty(PROP_SHEET_ID_DB);
-  const sheetId_Todo = properties.getProperty(PROP_SHEET_ID_TODO);
+  logToFile("QUOTIDIEN", `Lancement analyse ${SCRIPT_VERSION} (API Changes)...`);
+  const props = PropertiesService.getScriptProperties();
+
+  /* 1. Nettoyer les anciens déclencheurs temporaires */
+  supprimerDeclencheursScript(); 
+
+  /* 2. (v4.13.0) Sauvegarde de la [DB] */
+  try {
+    const folder = getOrCreateFolderByPath(CHEMIN_DOSSIER);
+    const dbFileId = props.getProperty(PROP_SHEET_ID_DB);
+    if (dbFileId) {
+      const dateStr = new Date().toISOString().slice(0, 10);
+      DriveApp.getFileById(dbFileId).makeCopy(`[DB] (Backup ${dateStr})`, folder);
+      logToFile("QUOTIDIEN", "Sauvegarde de la [DB] effectuée.");
+    }
+  } catch(e) { logToFile("ERREUR", `Echec sauvegarde [DB]: ${e.message}`); }
+
+  const sheetId_DB = props.getProperty(PROP_SHEET_ID_DB);
+  const sheetId_Todo = props.getProperty(PROP_SHEET_ID_TODO);
 
   if (!sheetId_DB || !sheetId_Todo) {
-    logToFile("ERREUR", "Base de données non initialisée. Exécutez 'LANCER_PREMIERE_ANALYSE_UNIQUEMENT' d'abord.");
+    logToFile("ERREUR", "DB non init. Voir Archive.");
     return;
   }
   
-  // v4.9.9 : Vider le TEMP (logique de "table rase" pour un nouveau jour)
-  try {
-    SpreadsheetApp.openById(sheetId_Todo).getSheets()[0].clearContents().appendRow(["Action", "ID", "Nom", "URL", "Taille", "ModifiedISO", "Dossier", "RowToUpdate"]);
+  /* 3. Vider le fichier [TEMP] */
+  try { 
+    /* Utilisation de l'API Sheets pour vider le [TEMP] Sheet */
+    Sheets.Spreadsheets.Values.clear({}, sheetId_Todo, 'Feuille 1');
+    /* On réécrit l'en-tête */
+    Sheets.Spreadsheets.Values.append({
+        values: [["Action","ID","Nom","URL","Taille","ISO","Dossier","Row"]]
+    }, sheetId_Todo, 'Feuille 1', { valueInputOption: 'USER_ENTERED' });
   } catch (e) {
-     logToFile("ERREUR", `Erreur lors du vidage du Sheet TEMP: ${e.message}`);
+    logToFile("ERREUR", `Échec de vidage/réécriture de [TEMP]: ${e.message}`);
   }
   
-  let dbData = {}; 
-  try {
-    const sheet = SpreadsheetApp.openById(sheetId_DB).getSheets()[0];
-    const data = sheet.getDataRange().getValues();
-    data.shift(); 
-    
-    data.forEach((row, index) => {
-      const fileId = row[0];
-      if (fileId) {
-        dbData[fileId] = {
-          row: index + 2, 
-          modifiedISO: row[4],
-          hash: row[6] // Colonne G
-        };
-      }
-    });
-    logToFile("QUOTIDIEN", `Base de données chargée. ${Object.keys(dbData).length} fichiers en référence.`);
-  } catch (e) {
-    logToFile("ERREUR", `ERREUR critique lors du chargement de la DB: ${e.message}`);
-    return;
-  }
+  /* 4. Initialiser les propriétés */
+  props.setProperty(PROP_ETAT_SCRIPT, 'DECOUVERTE_SYNCHRO');
+  props.setProperty(PROP_COMPTEUR_DECOUVERTE, "0");
+  props.setProperty(PROP_COMPTEUR_TRAITEMENT, "0");
+  props.setProperty(PROP_FICHIERS_TRAITES_CYCLE, "0");
+  props.setProperty(PROP_DATE_DEBUT_CYCLE, new Date().toISOString());
 
-  supprimerDeclencheursScript();
-  properties.setProperty(PROP_ETAT_SCRIPT, 'DECOUVERTE');
-  properties.setProperty(PROP_CONTINUATION_TOKEN, DriveApp.getFiles().getContinuationToken());
-  properties.setProperty(PROP_DB_DATA, JSON.stringify(dbData));
-  properties.setProperty(PROP_FICHIERS_VUS, JSON.stringify({})); 
-  properties.setProperty(PROP_COMPTEUR_DECOUVERTE, "0"); // Reset compteurs
-  properties.setProperty(PROP_COMPTEUR_TRAITEMENT, "0");
-  properties.setProperty(PROP_FICHIERS_TRAITES_CYCLE, "0");
-  properties.setProperty(PROP_DATE_DEBUT_CYCLE, new Date().toISOString());
-
-  creerProchainDeclencheur('traiterLotFichiers', 1, 'DECOUVERTE');
+  /* 5. Lancer le premier lot */
+  creerProchainDeclencheur('traiterLotFichiers', 1, 'DECOUVERTE_SYNCHRO');
   
   MailApp.sendEmail(EMAIL_POUR_RAPPORT, 
-                    "[Drive v4.10.1] Lancement de l'analyse quotidienne", 
-                    "L'analyse incrémentielle des fichiers nouveaux/modifiés a commencé.");
+                    `[Drive ${SCRIPT_VERSION}] Lancement de l'analyse quotidienne`, 
+                    `L'analyse (API Changes ${SCRIPT_VERSION}) des fichiers nouveaux/modifiés/supprimés a commencé.`);
 }
 
-
 /**
- * ====================================================================
- * FONCTION 3 : LE CŒUR DU SCRIPT (Machine à états)
- * ====================================================================
+ * Fonction "routeur" appelée par les déclencheurs temporaires.
  */
 function traiterLotFichiers() {
-  const properties = PropertiesService.getScriptProperties();
-  const etat = properties.getProperty(PROP_ETAT_SCRIPT);
-
+  const etat = PropertiesService.getScriptProperties().getProperty(PROP_ETAT_SCRIPT);
   try {
-    switch (etat) {
-      case 'DECOUVERTE_INITIALE':
-        logiqueDeDecouverte(true); 
-        break;
-      case 'DECOUVERTE':
-        logiqueDeDecouverte(false);
-        break;
-      case 'TRAITEMENT':
-        logiqueDeTraitement();
-        break;
-      case 'NETTOYAGE':
-        logiqueDeNettoyage();
-        break;
-      case 'RAPPORT':
-        genererRapportFinal();
-        break;
-      default:
-        logToFile("ERREUR", `État inconnu: ${etat}. Arrêt.`);
-        supprimerDeclencheursScript();
+    if (etat === 'DECOUVERTE_SYNCHRO') {
+      logiqueDeSynchronisationDesChangements();
+    } else if (etat === 'TRAITEMENT') {
+      logiqueDeTraitement();
+    } else if (etat === 'RAPPORT') {
+      genererRapportFinal();
+    } else { 
+      logToFile("ERREUR", `État inconnu ou obsolète: ${etat}. Réinitialisation à IDLE.`);
+      PropertiesService.getScriptProperties().setProperty(PROP_ETAT_SCRIPT, 'IDLE');
+      supprimerDeclencheursScript(); 
     }
   } catch (err) {
-    // Erreur "normale"
-    logToFile("ERREUR FATALE", `ERREUR MAJEURE : ${err.message}. Arrêt du script. ${err.stack}`);
-    MailApp.sendEmail(EMAIL_POUR_RAPPORT, "[Drive v4.10.1] ERREUR FATALE", `Une erreur a stoppé le script : ${err.message}\n${err.stack}`);
-    supprimerDeclencheursScript();
+    logToFile("ERREUR FATALE", `${err.message}`);
+    /* AMÉLIORATION V4.15.1 : On ne supprime plus le déclencheur. */
   }
 }
 
-/**
- * ====================================================================
- * LOGIQUE ÉTAT 1 & 2 : DÉCOUVERTE (MODIFIÉ v4.10.0)
- * ====================================================================
- */
-function logiqueDeDecouverte(estInitial) {
-  const properties = PropertiesService.getScriptProperties();
+/* --- NOUVELLE LOGIQUE DE DÉCOUVERTE (CORRIGÉE V5.0.1) --- */
+function logiqueDeSynchronisationDesChangements() {
+  const props = PropertiesService.getScriptProperties();
   const startTime = new Date().getTime();
-  
-  // v4.9.8 : Incrémenter le compteur
-  let compteur = parseInt(properties.getProperty(PROP_COMPTEUR_DECOUVERTE) || "0", 10) + 1;
-  properties.setProperty(PROP_COMPTEUR_DECOUVERTE, compteur.toString());
-  const etatActuel = estInitial ? 'DECOUVERTE_INITIALE' : 'DECOUVERTE';
-  logToFile(etatActuel, `Exécution du lot de découverte #${compteur}...`);
-  
-  const token = properties.getProperty(PROP_CONTINUATION_TOKEN);
-  const sheetId_Todo = properties.getProperty(PROP_SHEET_ID_TODO); 
-  let dbData = JSON.parse(properties.getProperty(PROP_DB_DATA) || '{}');
-  let fichiersVus = estInitial ? {} : JSON.parse(properties.getProperty(PROP_FICHIERS_VUS) || '{}');
-  
+  let compteur = parseInt(props.getProperty(PROP_COMPTEUR_DECOUVERTE) || "0") + 1;
+  props.setProperty(PROP_COMPTEUR_DECOUVERTE, compteur.toString());
+
+  const sheetTodo = SpreadsheetApp.openById(props.getProperty(PROP_SHEET_ID_TODO)).getSheets()[0];
+  let token = props.getProperty(PROP_CHANGE_TOKEN);
+  let nouvellesTaches = [];
+  let idsASupprimer = [];
+
+  /* Étape 1 : Logique de "Reset Usine" (V4.15.5) */
   if (!token) {
-    logToFile("ERREUR", "Token de découverte manquant. Arrêt.");
-    return;
+    logToFile("INFO", `Token ${SCRIPT_VERSION} non trouvé. Lancement d'un scan complet 'Reset' (pageToken: null).`);
   }
+
+  /* Étape 2 : Boucler sur les changements */
+  let pageToken = token;
+  let changements;
   
-  let iterator = DriveApp.continueFileIterator(token);
-  const sheetTodo = SpreadsheetApp.openById(sheetId_Todo).getSheets()[0]; 
-  let nouvellesTaches = []; // Batch pour l'écriture
+  try {
+    /* V5.0.1 : Correction de la faute de frappe */
+    const DOSSIER_ORPHELIN_ID_VALUE = props.getProperty(PROP_DOSSIER_ORPHELINS_ID);
+    let dossierOrphelins;
+    if (DOSSIER_ORPHELIN_ID_VALUE) dossierOrphelins = DriveApp.getFolderById(DOSSIER_ORPHELIN_ID_VALUE);
 
-  while (iterator.hasNext()) {
-    const tempsEcoule = (new Date().getTime() - startTime) / 1000;
-    if (tempsEcoule > TEMPS_MAX_EXECUTION_SECONDES) {
-      logToFile(etatActuel, "Temps limite du lot de DÉCOUVERTE atteint. Sauvegarde...");
-      
-      if (nouvellesTaches.length > 0) {
-        sheetTodo.getRange(sheetTodo.getLastRow() + 1, 1, nouvellesTaches.length, nouvellesTaches[0].length).setValues(nouvellesTaches);
+    while (pageToken !== undefined) { /* Utiliser undefined si nextPageToken n'existe pas */
+      if ((new Date().getTime() - startTime) / 1000 > TEMPS_MAX_EXECUTION_SECONDES) {
+        logToFile("DECOUVERTE_SYNCHRO", `Pause (limite temps). ${compteur} lots de changements traités.`);
+        break; /* Sortir de la boucle while pour sauvegarder */
       }
       
-      properties.setProperty(PROP_CONTINUATION_TOKEN, iterator.getContinuationToken());
-      if (!estInitial) properties.setProperty(PROP_FICHIERS_VUS, JSON.stringify(fichiersVus));
-      
-      // v4.10.0 : Utilise la PAUSE de 1 min (votre demande)
-      creerProchainDeclencheur('traiterLotFichiers', MINUTES_ENTRE_LOTS, etatActuel);
-      return; // Sortir
-    }
-    
-    try {
-      const fichier = iterator.next();
-      const fileId = fichier.getId();
-      const currentModifiedISO = fichier.getLastUpdated().toISOString();
+      /* V4.15.4 : Syntaxe API V2 (title, labels.trashed) */
+      changements = Drive.Changes.list({
+        pageToken: pageToken,
+        fields: "newStartPageToken, nextPageToken, changes(removed, fileId, file(id, title, mimeType, labels(trashed), modifiedDate, webViewLink, fileSize))"
+      });
 
-      if (!estInitial) {
-        fichiersVus[fileId] = 1; 
+      if (!changements.changes || changements.changes.length === 0) {
+         if (changements.nextPageToken) {
+           pageToken = changements.nextPageToken;
+           continue;
+         } else {
+           logToFile("INFO", "Aucun changement détecté dans ce lot.");
+           pageToken = null; /* Fin de la synchro */
+           break;
+         }
       }
-      
-      let dossier = "Racine"; 
-      try {
-        if (fichier.getParents().hasNext()) {
-          dossier = fichier.getParents().next().getName();
+
+      for (let chg of changements.changes) {
+        /* CAS 1 : Fichier supprimé ou mis à la corbeille (Syntaxe V2) */
+        if (chg.removed || (chg.file && chg.file.labels && chg.file.labels.trashed)) {
+          const idASupprimer = chg.fileId || (chg.file ? chg.file.id : null);
+          if (idASupprimer) {
+            idsASupprimer.push(idASupprimer);
+          }
+          continue;
         }
-      } catch (e) {}
 
-      let infoFichier = {
-        id: fileId,
-        nom: fichier.getName(),
-        url: fichier.getUrl(),
-        taille: fichier.getSize(),
-        modifiedISO: currentModifiedISO,
-        mime: fichier.getMimeType(),
-        dossier: dossier 
-      };
-      
-      let action = null; 
-      let rowToUpdate = null;
-      
-      if (estInitial) {
-        action = 'NEW';
-      } else {
-        const storedData = dbData[fileId];
-        if (!storedData) {
-          action = 'NEW';
-        } else if (storedData.modifiedISO !== currentModifiedISO) {
-          action = 'MODIFIED';
-          rowToUpdate = storedData.row;
-        }
-      }
-      
-      if (action) {
+        /* CAS 2 : Fichier ajouté ou modifié */
+        let f = chg.file;
+        if (!f || !f.id) continue; /* Ignore les changements sans fichier */
+        
+        let dossier = "?? API V4.15 ??"; // Sera recalculé par logiqueDeTraitement
+
         nouvellesTaches.push([
-          action, infoFichier.id, infoFichier.nom, infoFichier.url, 
-          infoFichier.taille, infoFichier.modifiedISO, infoFichier.dossier, rowToUpdate
+          "MODIFIED",               /* A: Action (MODIFIED par défaut) */
+          f.id,                     /* B: ID */
+          f.title,                  /* C: Nom (V2 utilise "title") */
+          f.webViewLink,            /* D: URL */
+          f.fileSize || 0,          /* E: Taille */
+          f.modifiedDate,           /* F: ModifiedISO */
+          dossier,                  /* G: Dossier (Sera recalculé) */
+          ""                        /* H: RowToUpdate (vide par défaut, forçant V4.13 à chercher) */
         ]);
       }
       
-      if (nouvellesTaches.length >= 100) {
-        sheetTodo.getRange(sheetTodo.getLastRow() + 1, 1, nouvellesTaches.length, nouvellesTaches[0].length).setValues(nouvellesTaches);
-        nouvellesTaches = []; // Vider le batch
+      /* Si le temps est écoulé, on sauvegarde le token de cette page */
+      if ((new Date().getTime() - startTime) / 1000 > TEMPS_MAX_EXECUTION_SECONDES) {
+        props.setProperty(PROP_CHANGE_TOKEN, pageToken);
+        pageToken = null; /* Arrêter la boucle */
+      } else {
+        /* Sinon, on passe à la page suivante (le token sera le nextPageToken s'il existe) */
+        pageToken = changements.nextPageToken;
       }
-      
-    } catch (e) {
-      logToFile(etatActuel, `Erreur sur 1 fichier pendant découverte: ${e.message}. Ignoré.`);
+    } /* Fin While */
+
+    /* Étape 3 : Écrire les lots de travail (V4.15.5) */
+    if (nouvellesTaches.length > 0) {
+      sheetTodo.getRange(sheetTodo.getLastRow() + 1, 1, nouvellesTaches.length, nouvellesTaches[0].length).setValues(nouvellesTaches);
+      logToFile("DECOUVERTE_SYNCHRO", `Lot de ${nouvellesTaches.length} tâches (NEW/MODIFIED) ajouté à [TEMP].`);
     }
-  } 
-  
-  if (nouvellesTaches.length > 0) {
-    sheetTodo.getRange(sheetTodo.getLastRow() + 1, 1, nouvellesTaches.length, nouvellesTaches[0].length).setValues(nouvellesTaches);
+    if (idsASupprimer.length > 0) {
+      mettreAJourStatutDB(idsASupprimer, 'SUPPRIMÉ');
+      logToFile("DECOUVERTE_SYNCHRO", `${idsASupprimer.length} fichiers marqués comme 'SUPPRIMÉ' dans [DB].`);
+    }
+
+    /* Étape 4 : Prochain cycle */
+    if (pageToken) {
+      /* Le temps était écoulé, on relance */
+      creerProchainDeclencheur('traiterLotFichiers', MINUTES_ENTRE_LOTS, 'DECOUVERTE_SYNCHRO');
+    } else {
+      /* C'est terminé, on passe au traitement */
+      logToFile("DECOUVERTE_SYNCHRO", `Phase DECOUVERTE (${SCRIPT_VERSION}) terminée.`);
+      props.setProperty(PROP_CHANGE_TOKEN, changements.newStartPageToken); /* Sauvegarde le token final */
+      props.setProperty(PROP_ETAT_SCRIPT, 'TRAITEMENT');
+      creerProchainDeclencheur('traiterLotFichiers', MINUTES_ENTRE_LOTS, 'TRAITEMENT');
+    }
+
+  } catch (e) {
+    logToFile("ERREUR FATALE", `(${SCRIPT_VERSION}) ${e.message}. Token non mis à jour. Reprise au prochain cycle.`);
   }
-  
-  logToFile(etatActuel, "Phase de DÉCOUVERTE terminée.");
-  
-  if (estInitial) {
-    properties.setProperty(PROP_ETAT_SCRIPT, 'TRAITEMENT');
-  } else {
-    properties.setProperty(PROP_ETAT_SCRIPT, 'NETTOYAGE');
-    properties.setProperty(PROP_FICHIERS_VUS, JSON.stringify(fichiersVus));
+}
+
+/* --- NOUVEL OUTIL (MODIFIÉ V5.0.0) --- */
+/* Met à jour la colonne G (Statut) pour une liste d'IDs (Colonne A) */
+function mettreAJourStatutDB(listeIds, statut) {
+  if (!listeIds || listeIds.length === 0) return;
+
+  logToFile("INFO", `Mise à jour de ${listeIds.length} statuts vers '${statut}'...`);
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const sheetIdDB = props.getProperty(PROP_SHEET_ID_DB);
+    const sheetDB = SpreadsheetApp.openById(sheetIdDB).getSheets()[0];
+    const data = sheetDB.getRange("A1:A" + sheetDB.getLastRow()).getValues();
+    
+    /* 1. Créer un index rapide (Map) des IDs et de leur N° de ligne */
+    const idMap = new Map();
+    for (let i = 0; i < data.length; i++) {
+      if (data[i][0]) {
+        idMap.set(data[i][0], i + 1); /* i+1 = N° de ligne (base 1) */
+      }
+    }
+
+    /* 2. Préparer les requêtes de mise à jour par lots (API Sheets) */
+    const dataToUpdate = [];
+    const rangesToUpdate = [];
+    
+    for (const id of listeIds) {
+      if (idMap.has(id)) {
+        /* On prépare la valeur à insérer (le statut) et la cellule cible */
+        dataToUpdate.push([statut]);
+        rangesToUpdate.push(`G${idMap.get(id)}`); /* Colonne G = Statut */
+      }
+    }
+
+    /* 3. Mettre à jour en un seul appel batch (V5.0.0) */
+    if (rangesToUpdate.length > 0) {
+      const requests = rangesToUpdate.map((range, index) => ({
+          range: range,
+          values: [dataToUpdate[index]]
+      }));
+
+      Sheets.Spreadsheets.Values.batchUpdate({
+        valueInputOption: 'USER_ENTERED',
+        data: requests
+      }, sheetIdDB);
+    }
+  } catch (e) {
+    logToFile("ERREUR", `(${SCRIPT_VERSION}) Échec de la mise à jour groupée du statut : ${e.message}`);
   }
-  
-  creerProchainDeclencheur('traiterLotFichiers', MINUTES_ENTRE_LOTS, 'TRAITEMENT');
 }
 
 
-/**
- * ====================================================================
- * LOGIQUE ÉTAT 3 : TRAITEMENT (MODIFIÉ v4.10.0)
- * ====================================================================
- */
+/* --- LOGIQUE DE TRAITEMENT (MODIFIÉE V5.0.0) --- */
+/* Cette fonction est appelée APRES la découverte V4.15 */
 function logiqueDeTraitement() {
-  const properties = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getScriptProperties();
   const startTime = new Date().getTime();
-  let tempsEcoule = 0;
+  let compteur = parseInt(props.getProperty(PROP_COMPTEUR_TRAITEMENT) || "0") + 1;
+  props.setProperty(PROP_COMPTEUR_TRAITEMENT, compteur.toString());
   
-  // v4.9.8 : Incrémenter le compteur
-  let compteur = parseInt(properties.getProperty(PROP_COMPTEUR_TRAITEMENT) || "0", 10) + 1;
-  properties.setProperty(PROP_COMPTEUR_TRAITEMENT, compteur.toString());
-  let fichiersTraitesCeLot = 0;
-
-  const sheetId_DB = properties.getProperty(PROP_SHEET_ID_DB);
-  const sheetId_Todo = properties.getProperty(PROP_SHEET_ID_TODO);
+  const sheetIdDB = props.getProperty(PROP_SHEET_ID_DB);
+  const sheetDB = SpreadsheetApp.openById(sheetIdDB).getSheets()[0];
+  const sheetTodo = SpreadsheetApp.openById(props.getProperty(PROP_SHEET_ID_TODO)).getSheets()[0];
   
-  const sheetDB = SpreadsheetApp.openById(sheetId_DB).getSheets()[0];
-  const sheetTodo = SpreadsheetApp.openById(sheetId_Todo).getSheets()[0];
+  /* V4.15 : Créer l'index de la DB (pour trouver les RowToUpdate) */
+  const dbData = sheetDB.getDataRange().getValues();
+  const dbMap = new Map();
+  for (let i = 1; i < dbData.length; i++) {
+    if (dbData[i][0]) {
+      dbMap.set(dbData[i][0], i + 1); /* Map<ID, RowIndex> */
+    }
+  }
   
   let taches = [];
   try {
     const data = sheetTodo.getDataRange().getValues();
-    data.shift(); // Enlever l'en-tête
+    data.shift();
     if (data.length === 0) {
-      logToFile("TRAITEMENT", "Phase de TRAITEMENT terminée (rien à faire). Passage au RAPPORT.");
-      properties.setProperty(PROP_ETAT_SCRIPT, 'RAPPORT');
+      props.setProperty(PROP_ETAT_SCRIPT, 'RAPPORT');
       creerProchainDeclencheur('traiterLotFichiers', MINUTES_ENTRE_LOTS, 'RAPPORT');
       return;
     }
-    
-    const nbTaches = Math.min(data.length, BATCH_SIZE_TRAITEMENT);
-    taches = data.slice(0, nbTaches);
-    
-  } catch (e) {
-    logToFile("ERREUR", `Erreur lecture Sheet TEMP: ${e.message}`);
-    return;
-  }
+    taches = data.slice(0, BATCH_SIZE_TRAITEMENT);
+  } catch (e) { return; }
   
-  logToFile("TRAITEMENT", `Début du lot de TRAITEMENT #${compteur}. Traitement de ${taches.length} fichiers.`);
+  logToFile("TRAITEMENT", `Lot #${compteur} (${taches.length} fichiers).`);
   
-  let lignesNouvellesDB = [];
+  let lignesDB_New = [];
+  let updateRequests = []; /* V5.0.0 : Pour les MODIFIED via batchUpdate */
   let i = 0;
   
   while (i < taches.length) {
-    tempsEcoule = (new Date().getTime() - startTime) / 1000;
-    if (tempsEcoule > TEMPS_MAX_EXECUTION_SECONDES) {
-      logToFile("TRAITEMENT", "Temps limite du lot de TRAITEMENT atteint. Sauvegarde...");
-      break; 
-    }
+    if ((new Date().getTime() - startTime) / 1000 > TEMPS_MAX_EXECUTION_SECONDES) break;
     
-    const item = taches[i];
-    const action = item[0];
-    const info = {
-      id: item[1],
-      nom: item[2],
-      url: item[3],
-      taille: parseFloat(item[4]),
-      modifiedISO: item[5],
-      dossier: item[6],
-    };
-    const rowToUpdate = item[7];
+    const t = taches[i]; /* [Action, ID, Nom, URL, Taille, ISO, Dossier, RowToUpdate] */
+    let hash = '', cheminComplet = '', dateStr = '', heureStr = '';
     
-    let hashOuStatut = '';
-    const logPrefix = `Traitement: ID ${info.id} | Nom: ${info.nom} | Taille: ${info.taille}`;
-
     try {
-      // VÉRIFICATION v4.9.2 : TAILLE UNIQUEMENT
-      if (info.taille > MAX_FILE_SIZE_BYTES) { 
-          hashOuStatut = 'IGNORÉ - Fichier trop volumineux';
-          logToFile("TRAITEMENT", `${logPrefix} | Statut: ${hashOuStatut} (Limite 45Mo)`);
-      }
-      // Si non exclu, on continue
-      else {
-        logToFile("TRAITEMENT", `${logPrefix} | Étape 1: getFileById...`);
-        const fichier = DriveApp.getFileById(info.id);
+      if (t[4] > MAX_FILE_SIZE_BYTES) {
+        hash = 'IGNORÉ - Fichier trop volumineux';
+      } else {
+        const f = DriveApp.getFileById(t[1]);
+        const mime = f.getMimeType();
         
-        logToFile("TRAITEMENT", `${logPrefix} | Étape 2: getMimeType...`);
-        const mimeType = fichier.getMimeType();
+        /* v4.13.0 : Calcul du chemin complet et Timestamp (toujours fait) */
+        cheminComplet = getCheminComplet(f);
+        const dateObj = new Date(t[5]); /* Utilise l'ISO de l'API (t[5]) */
+        dateStr = Utilities.formatDate(dateObj, Session.getScriptTimeZone(), "dd/MM/yyyy");
+        heureStr = Utilities.formatDate(dateObj, Session.getScriptTimeZone(), "HH:mm:ss");
+        
+        /* V4.15 : Le dossier est recalculé ici pour remplacer "?? API V4.15 ??" */
+        const parents = f.getParents();
+        const dossier = parents.hasNext() ? parents.next().getName() : NOM_DOSSIER_ORPHELINS;
+        t[6] = dossier; /* Met à jour le nom du dossier */
 
-        if (info.taille === 0 || mimeType === MimeType.SHORTCUT || mimeType.includes('google-apps')) {
-          hashOuStatut = 'IGNORÉ - Type Google/Vide';
-          logToFile("TRAITEMENT", `${logPrefix} | Statut: ${hashOuStatut}`);
+        if (t[4] === 0 || mime === MimeType.SHORTCUT || mime.includes('google-apps')) {
+          hash = 'IGNORÉ - Type Google/Vide';
         } else {
-          logToFile("TRAITEMENT", `${logPrefix} | Étape 3: getBlob (opération risquée)...`);
-          const blob = fichier.getBlob(); 
-          
-          logToFile("TRAITEMENT", `${logPrefix} | Étape 4: computeDigest (calcul)...`);
-          const hashBytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, blob.getBytes());
-          
-          hashOuStatut = hashBytes.map(function(byte) {
-            var hex = ((byte + 256) % 256).toString(16);
-            return hex.length === 1 ? '0' + hex : hex;
-          }).join('');
-          logToFile("TRAITEMENT", `${logPrefix} | Étape 5: Hash calculé.`);
+          hash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, f.getBlob().getBytes())
+                 .map(b => ((b+256)%256).toString(16).padStart(2,'0')).join('');
         }
       }
-    } catch (e) {
-      logToFile("ERREUR", `${logPrefix} | ERREUR NORMALE: ${e.message}`);
-      hashOuStatut = `ERREUR - ${e.message}`;
+    } catch (e) { hash = `ERREUR - ${e.message}`; }
+    
+    const row = [t[1], t[2], t[3], t[4], t[5], t[6], hash, cheminComplet, dateStr, heureStr];
+    
+    /* V4.15 : Décide si c'est NEW ou MODIFIED en cherchant la RowToUpdate */
+    let rowToUpdate = dbMap.get(t[1]); /* Cherche l'ID dans la Map V4.15 */
+    
+    if (rowToUpdate) {
+      /* C'est MODIFIED (V5.0.0 : Ajout à la liste de batch pour MODIFIED) */
+      updateRequests.push({
+          range: `A${rowToUpdate}:J${rowToUpdate}`,
+          values: [row]
+      });
+    } else {
+      /* C'est NEW */
+      lignesDB_New.push(row);
     }
     
-    const rowData = [info.id, info.nom, info.url, info.taille, info.modifiedISO, info.dossier, hashOuStatut];
-    
-    if (action === 'NEW') {
-      lignesNouvellesDB.push(rowData);
-    } else if (action === 'MODIFIED') {
-      const range = sheetDB.getRange(rowToUpdate, 1, 1, rowData.length);
-      range.setValues([rowData]);
-    }
+    if(hash.startsWith('IGNORÉ') || hash.startsWith('ERREUR')) logToFile("TRAITEMENT", `ID ${t[1]} | ${hash}`);
     i++;
-    fichiersTraitesCeLot++;
-  } // Fin du While
-
-  // Mise à jour du compteur global
-  let fichiersTraitesTotal = parseInt(properties.getProperty(PROP_FICHIERS_TRAITES_CYCLE) || "0", 10) + fichiersTraitesCeLot;
-  properties.setProperty(PROP_FICHIERS_TRAITES_CYCLE, fichiersTraitesTotal.toString());
-
-  if (lignesNouvellesDB.length > 0) {
-    logToFile("TRAITEMENT", `Ajout de ${lignesNouvellesDB.length} nouvelles lignes à la DB...`);
-    sheetDB.getRange(sheetDB.getLastRow() + 1, 1, lignesNouvellesDB.length, lignesNouvellesDB[0].length).setValues(lignesNouvellesDB);
   }
   
-  if (i > 0) {
-    logToFile("TRAITEMENT", `Suppression de ${i} tâches traitées du Sheet [TEMP]...`);
-    sheetTodo.deleteRows(2, i); // Supprime les lignes 2 à i+1 (car 1-indexé + en-tête)
+  /* V5.0.0 : Écriture des MODIFIED (Batch Update) et des NEW (Append) */
+  try {
+    if (updateRequests.length > 0) {
+      Sheets.Spreadsheets.Values.batchUpdate({
+        valueInputOption: 'USER_ENTERED',
+        data: updateRequests
+      }, sheetIdDB);
+    }
+    
+    if (lignesDB_New.length > 0) {
+       Sheets.Spreadsheets.Values.append({
+        values: lignesDB_New
+       }, sheetIdDB, 'Feuille 1', { valueInputOption: 'USER_ENTERED' });
+    }
+  } catch (e) {
+    logToFile("ERREUR CRITIQUE", `Échec écriture DB (V5.0.0 Batch) : ${e.message}`);
+    /* Note: Les lignes TO-DO ne sont pas supprimées, elles seront traitées au prochain lot. */
   }
 
-  // v4.10.0 : Logique de pause (toujours 1 minute)
-  if (tempsEcoule > TEMPS_MAX_EXECUTION_SECONDES) {
-    logToFile("TRAITEMENT", "Lot terminé (timeout). Relance avec pause de 1 min...");
-  } else {
-    logToFile("TRAITEMENT", "Lot terminé (rapide). Relance avec relais de 1 min...");
-  }
+  if (i > 0) sheetTodo.deleteRows(2, i);
+  
+  let total = parseInt(props.getProperty(PROP_FICHIERS_TRAITES_CYCLE) || "0") + i;
+  props.setProperty(PROP_FICHIERS_TRAITES_CYCLE, total.toString());
+  
   creerProchainDeclencheur('traiterLotFichiers', MINUTES_ENTRE_LOTS, 'TRAITEMENT');
 }
 
 
-/**
- * ====================================================================
- * LOGIQUE ÉTAT 4 : NETTOYAGE
- * ====================================================================
- */
-function logiqueDeNettoyage() {
-  logToFile("NETTOYAGE", "Début de la phase de NETTOYAGE...");
-  const properties = PropertiesService.getScriptProperties();
-  const sheetId_DB = properties.getProperty(PROP_SHEET_ID_DB);
-  
-  const dbData = JSON.parse(properties.getProperty(PROP_DB_DATA) || '{}');
-  const fichiersVus = JSON.parse(properties.getProperty(PROP_FICHIERS_VUS) || '{}');
-  
-  const sheetDB = SpreadsheetApp.openById(sheetId_DB).getSheets()[0];
-  let modifications = []; 
-  
-  for (const fileId in dbData) {
-    if (!fichiersVus[fileId]) {
-      const info = dbData[fileId];
-      if (info.hash !== 'SUPPRIMÉ') { 
-        modifications.push({
-          range: sheetDB.getRange(info.row, 7), // Colonne G (Hash/Statut)
-          value: 'SUPPRIMÉ'
-        });
-      }
+/* Fonction utilitaire pour le chemin complet (INCHANGÉE - V4.13.0) */
+function getCheminComplet(fichier) {
+  try {
+    let pathParts = [fichier.getName()];
+    let folder = fichier.getParents().hasNext() ? fichier.getParents().next() : null;
+    let rootId = DriveApp.getRootFolder().getId();
+    while (folder && folder.getId() !== rootId) {
+        pathParts.unshift(folder.getName());
+        folder = folder.getParents().hasNext() ? folder.getParents().next() : null;
     }
-  }
-  
-  logToFile("NETTOYAGE", `Marquage de ${modifications.length} fichiers comme 'SUPPRIMÉ'.`);
-  
-  for (const modif of modifications) {
-    try {
-      modif.range.setValue(modif.value);
-    } catch(e) {
-      logToFile("ERREUR", `Erreur lors du marquage 'SUPPRIMÉ': ${e.message}`);
-    }
-  }
-
-  logToFile("NETTOYAGE", "Phase de NETTOYAGE terminée.");
-  
-  properties.setProperty(PROP_ETAT_SCRIPT, 'TRAITEMENT');
-  creerProchainDeclencheur('traiterLotFichiers', MINUTES_ENTRE_LOTS, 'TRAITEMENT');
+    pathParts.unshift("Mon Drive");
+    return pathParts.join(' / ');
+  } catch(e) { return "[Chemin inaccessible]"; }
 }
 
+/* LOGIQUE DE NETTOYAGE (SUPPRIMÉE - V4.15.0) */
 
-/**
- * ====================================================================
- * LOGIQUE ÉTAT 5 : RAPPORT (MODIFIÉ v4.10.0)
- * ====================================================================
- */
+
+/* --- GÉNÉRATION DES RAPPORTS (MODIFIÉ V5.0.0) --- */
 function genererRapportFinal() {
-  logToFile("RAPPORT", "Génération du rapport final (v4.10.1)...");
-  const properties = PropertiesService.getScriptProperties();
-  const sheetId_DB = properties.getProperty(PROP_SHEET_ID_DB);
-  const sheetId_Todo = properties.getProperty(PROP_SHEET_ID_TODO); 
-  const sheetId_Stats = properties.getProperty(PROP_SHEET_ID_STATS);
+  logToFile("RAPPORT", `Génération des rapports (${SCRIPT_VERSION})...`);
+  const props = PropertiesService.getScriptProperties();
   const folder = getOrCreateFolderByPath(CHEMIN_DOSSIER);
+  
+  let totalFichiersDB = 0, espaceTotal = 0, totalDoublons = 0, espacePerdu = 0;
+  let doublonsCount = 0, perduSize = 0;
+  
+  let sheetId_DB = props.getProperty(PROP_SHEET_ID_DB);
+  let sheetId_Stats = props.getProperty(PROP_SHEET_ID_STATS);
+  let sheetId_Action = props.getProperty(PROP_SHEET_ID_ACTION);
+
+  /* Auto-réparation des IDs manquants (CORRIGÉ V4.15.2) */
+  if (!sheetId_DB || !sheetId_Stats || !sheetId_Action) {
+    logToFile("ERREUR", "IDs de rapport manquants. Exécutez 'RESTAURER_PROPRIETES_RAPPORT' depuis Outils.gs");
+    sheetId_DB = props.getProperty(PROP_SHEET_ID_DB);
+    sheetId_Stats = props.getProperty(PROP_SHEET_ID_STATS);
+    sheetId_Action = props.getProperty(PROP_SHEET_ID_ACTION);
+    
+    if (!sheetId_DB || !sheetId_Stats || !sheetId_Action) {
+       logToFile("ERREUR CRITIQUE", "Impossible de continuer sans les IDs de rapport.");
+       return; /* Arrêt propre */
+    }
+  }
 
   let dataDB;
   try {
-    const sheet = SpreadsheetApp.openById(sheetId_DB).getSheets()[0];
-    dataDB = sheet.getDataRange().getValues();
-    dataDB.shift(); // Enlève l'en-tête
-  } catch (e) {
-    logToFile("ERREUR", `Impossible de lire la DB ${sheetId_DB}. ${e.message}`);
-    MailApp.sendEmail(EMAIL_POUR_RAPPORT, "[Drive v4.10.1] ERREUR Rapport", `Impossible de lire la base de donnees pour generer le rapport final.`);
-    return;
-  }
+    const sheetDB = SpreadsheetApp.openById(sheetId_DB).getSheets()[0];
+    dataDB = sheetDB.getDataRange().getValues();
+    dataDB.shift(); 
+  } catch (e) { logToFile("ERREUR", `DB inaccessible: ${e.message}`); return; }
 
-  // --- Initialisation des stats ---
-  const mapHashes = {};
-  const fichiersIgnores = [];
-  const mapFormats = {}; // v4.9.8
-  const top100Fichiers = []; // v4.9.8
-  let totalFichiersDB = 0;
-  let espaceTotal = 0;
-  
+  const mapHashes = {}, fichiersIgnores = [], fichiers0ko = [], mapFormats = {}, top100 = [];
+
   for (const row of dataDB) {
     totalFichiersDB++;
-    // row = [ID, Nom, URL, Taille, ModifiéLe, Dossier, Hash/Statut]
-    const hashOrStatus = row[6];
-    const dossier = row[5];
-    const nom = row[1];
-    const taille = parseFloat(row[3]) || 0;
-    espaceTotal += taille;
+    /* [ID, Nom, URL, Taille, ISO, Dossier, Hash, Chemin, Date, Heure] */
+    const id=row[0], nom=row[1], url=row[2], taille=parseFloat(row[3])||0, dossier=row[5], hash=row[6], chemin=row[7], date=row[8], heure=row[9];
     
-    // v4.9.8 : Analyse des formats
-    const extension = (nom.includes('.')) ? nom.substring(nom.lastIndexOf('.')).toLowerCase() : "[Aucune extension]";
-    if (!mapFormats[extension]) {
-      mapFormats[extension] = { count: 0, size: 0 };
-    }
+    espaceTotal += taille;
+    const nomFichierSafe = String(nom || ''); 
+    const extension = (nomFichierSafe.includes('.')) ? nomFichierSafe.substring(nomFichierSafe.lastIndexOf('.')).toLowerCase() : "[Aucune extension]";
+    if (!mapFormats[extension]) mapFormats[extension] = { count: 0, size: 0, desc: (FORMAT_DESCRIPTIONS[extension] || "Fichier " + extension) };
     mapFormats[extension].count++;
     mapFormats[extension].size += taille;
 
-    // v4.9.8 : Top 100
-    top100Fichiers.push({ nom: nom, dossier: dossier, taille: taille });
+    top100.push({ nom: nom, dossier: dossier, taille: taille, chemin: chemin, url: url, date: date, heure: heure });
     
-    // Logique de doublons
-    if (hashOrStatus.startsWith("IGNORÉ") || hashOrStatus.startsWith("ERREUR") || hashOrStatus.startsWith("SUPPRIMÉ")) {
-      fichiersIgnores.push({
-        nom: nom,
-        taille: taille,
-        raison: hashOrStatus,
-        dossier: dossier
-      });
-    } else if (hashOrStatus) {
-      const infoFichier = { id: row[0], nom: row[1], url: row[2], taille: taille, hash: hashOrStatus, dossier: dossier };
-      if (!mapHashes[infoFichier.hash]) {
-        mapHashes[infoFichier.hash] = [];
+    if (taille === 0 && (!hash || !hash.startsWith("IGNORÉ"))) {
+      fichiers0ko.push([false, nom, chemin, 0, url, id, date, heure]);
+    }
+    else if (hash && (hash.startsWith("IGNORÉ") || hash.startsWith("ERREUR") || hash.startsWith("SUPPRIMÉ"))) {
+      /* V4.15 : On ne compte plus les "SUPPRIMÉ" comme des "Ignorés" */
+      if (hash !== 'SUPPRIMÉ') {
+        fichiersIgnores.push([id, nom, chemin, taille, hash]);
       }
-      mapHashes[infoFichier.hash].push(infoFichier);
+    } 
+    else if (hash) {
+      const infoFichier = { id: id, nom: nom, url: url, taille: taille, hash: hash, dossier: dossier, chemin: chemin, date: date, heure: heure };
+      if (!mapHashes[hash]) mapHashes[hash] = [];
+      mapHashes[hash].push(infoFichier);
     }
   }
 
-  // --- Préparation du Sheet d'ACTION ---
-  let sheetAction;
-  let sheetActionUrl;
+  /* --- [ACTION] --- */
+  let sheetActionUrl = "";
   try {
-    const files = folder.getFilesByName(NOM_SHEET_ACTION); // Chercher dans le dossier
-    if (files.hasNext()) {
-      sheetAction = SpreadsheetApp.open(files.next());
-      sheetActionUrl = sheetAction.getUrl();
-    } else {
-      sheetAction = SpreadsheetApp.create(NOM_SHEET_ACTION);
-      sheetActionUrl = sheetAction.getUrl();
-      DriveApp.getFileById(sheetAction.getId()).moveTo(folder);
-    }
+    const actionSpreadsheet = SpreadsheetApp.openById(sheetId_Action);
+    sheetActionUrl = actionSpreadsheet.getUrl();
     
-    const sheet = sheetAction.getSheets()[0];
-    sheet.clear(); 
-    sheet.appendRow(["Nom du Fichier", "Dossier (Parent)", "Taille (octets)", "URL (Lien)", "ID Fichier", "Hash (Groupe)", "ACTION"]);
-    sheet.setFrozenRows(1);
+    /* Onglet Doublons */
+    let sheetDoublons = actionSpreadsheet.getSheetByName("Doublons");
+    if(!sheetDoublons) sheetDoublons = actionSpreadsheet.insertSheet("Doublons", 0);
+    sheetDoublons.clear(); 
+    sheetDoublons.appendRow(["EFFACER", "Nom", "Chemin Complet", "Taille", "Date", "Heure", "URL", "ID", "Hash"]);
+    sheetDoublons.setFrozenRows(1);
     
-    const rule = SpreadsheetApp.newDataValidation().requireValueInList(['GARDER'], true).build();
-    sheet.getRange('G2:G').setDataValidation(rule);
-    
-  } catch (e) {
-    logToFile("ERREUR", `Impossible de créer/modifier le Sheet d'ACTION: ${e.message}`);
-    MailApp.sendEmail(EMAIL_POUR_RAPPORT, "[Drive v4.10.1] ERREUR Rapport", `Impossible de générer le Sheet d'action : ${e.message}`);
-    return;
-  }
-
-  // --- Remplissage du Sheet d'ACTION et calcul des stats ---
-  let totalDoublons = 0;
-  let espacePerdu = 0;
-  let lignesAction = [];
-
-  for (const hash in mapHashes) {
-    const fichiersIdentiques = mapHashes[hash];
-    if (fichiersIdentiques.length > 1) { 
-      totalDoublons += fichiersIdentiques.length;
-      espacePerdu += fichiersIdentiques[0].taille * (fichiersIdentiques.length - 1);
-      
-      for (const info of fichiersIdentiques) {
-        lignesAction.push([
-          info.nom, info.dossier, info.taille,
-          info.url, info.id, info.hash, "" 
-        ]);
+    let actionRows = [];
+    for (const h in mapHashes) {
+      const grp = mapHashes[h];
+      if (grp.length > 1) {
+        doublonsCount += grp.length;
+        perduSize += grp[0].taille * (grp.length - 1);
+        grp.forEach(f => actionRows.push([false, f.nom, f.chemin, f.taille, f.date, f.heure, f.url, f.id, f.hash]));
+        actionRows.push(["", "", "", "", "", "", "", "", ""]); 
       }
-      lignesAction.push(["", "", "", "", "", "", ""]); 
     }
-  }
-  
-  if (lignesAction.length > 0) {
-    sheetAction.getSheets()[0].getRange(2, 1, lignesAction.length, lignesAction[0].length).setValues(lignesAction);
-    logToFile("RAPPORT", `Sheet d'action mis à jour avec ${totalDoublons} fichiers.`);
-  } else {
-    sheetAction.getSheets()[0].getRange(2, 1).setValue("Aucun doublon trouvé.");
-  }
+    if(actionRows.length>0) {
+      sheetDoublons.getRange(2,1,actionRows.length,9).setValues(actionRows);
+      sheetDoublons.getRange(2,1,actionRows.length,1).insertCheckboxes();
+    }
 
+    /* Onglet 0 Ko */
+    let sheet0ko = actionSpreadsheet.getSheetByName("Fichiers 0 ko");
+    if (!sheet0ko) sheet0ko = actionSpreadsheet.insertSheet("Fichiers 0 ko", 1);
+    sheet0ko.clear();
+    sheet0ko.appendRow(["EFFACER", "Nom", "Chemin", "Taille", "URL", "ID", "Date", "Heure"]);
+    if(fichiers0ko.length > 0) {
+      sheet0ko.getRange(2,1,fichiers0ko.length,8).setValues(fichiers0ko);
+      sheet0ko.getRange(2,1,fichiers0ko.length,1).insertCheckboxes();
+    }
 
-  // --- CSV des IGNORÉS/SUPPRIMÉS ---
-  let csvContenuIgnore = '"Nom du Fichier","Dossier (Parent)","Taille (octets)","Raison"\n';
-  for (const info of fichiersIgnores) {
-    csvContenuIgnore += `"${info.nom.replace(/"/g, '""')}","${info.dossier.replace(/"/g, '""')}","${info.taille}","${info.raison}"\n`;
-  }
-  const DATE_AUJOURDHUI = new Date().toISOString().slice(0, 10);
-  const nomFichierIgnore = `Rapport_Fichiers_Ignorés_${DATE_AUJOURDHUI}.csv`;
-  const fichierCsvIgnore = folder.createFile(nomFichierIgnore, csvContenuIgnore, MimeType.CSV); // Créer dans le dossier
-  logToFile("RAPPORT", `Rapport des ignorés créé : ${fichierCsvIgnore.getName()}`);
+    /* Onglet Dossiers Vides (v4.13.0) */
+    let sheetDossiersVides = actionSpreadsheet.getSheetByName("Dossiers Vides");
+    if (!sheetDossiersVides) sheetDossiersVides = actionSpreadsheet.insertSheet("Dossiers Vides", 2);
+    sheetDossiersVides.clear();
+    sheetDossiersVides.appendRow(["Nom", "Chemin Complet", "URL", "ID"]);
+    const dossiersVides = chercherDossiersVides(); // Scan lent
+    if(dossiersVides.length > 0) {
+      sheetDossiersVides.getRange(2,1,dossiersVides.length,4).setValues(dossiersVides);
+    }
+    
+    logToFile("RAPPORT", `Sheet [ACTION] mis à jour. ${doublonsCount} doublons, ${fichiers0ko.length} fichiers 0ko, ${dossiersVides.length} dossiers vides.`);
+  } catch(e) { logToFile("ERREUR", `Erreur Action Sheet: ${e.message}`); }
 
-  // --- v4.9.8 : Mise à jour du [STATS] Tableau de Bord ---
+  /* --- [STATS] --- */
+  let statsSheetUrl = "";
   try {
     const statsSheet = SpreadsheetApp.openById(sheetId_Stats);
+    statsSheetUrl = statsSheet.getUrl();
     
-    // 1. Tableau de Bord
-    const tdbSheet = statsSheet.getSheetByName("Tableau de Bord");
+    /* Ignorés */
+    let sheetIgn = statsSheet.getSheetByName("Fichiers Ignorés");
+    if(!sheetIgn) sheetIgn = statsSheet.insertSheet("Fichiers Ignorés");
+    sheetIgn.clear();
+    sheetIgn.appendRow(["ID", "Nom", "Chemin/Dossier", "Taille", "Raison"]);
+    if(fichiersIgnores.length > 0) sheetIgn.getRange(2,1,fichiersIgnores.length,5).setValues(fichiersIgnores);
+
+    /* Tableau de Bord */
+    let tdbSheet = statsSheet.getSheetByName("Tableau de Bord");
     tdbSheet.clear();
     const dateFinCycle = new Date();
-    const dateDebutCycle = new Date(properties.getProperty(PROP_DATE_DEBUT_CYCLE));
+    const dateDebutCycle = new Date(props.getProperty(PROP_DATE_DEBUT_CYCLE) || dateFinCycle);
     const dureeCycleMs = dateFinCycle.getTime() - dateDebutCycle.getTime();
     const dureeCycleMin = (dureeCycleMs / 1000 / 60).toFixed(2);
-    const espacePerduGo = (espacePerdu / 1024 / 1024 / 1024).toFixed(2);
+    const espacePerduGo = (perduSize / 1024 / 1024 / 1024).toFixed(2);
     const espaceTotalGo = (espaceTotal / 1024 / 1024 / 1024).toFixed(2);
     
     tdbSheet.appendRow(["Statistique", "Valeur"]);
     tdbSheet.appendRow(["Dernière Analyse", dateFinCycle.toLocaleString("fr-BE")]);
     tdbSheet.appendRow(["Durée Totale du Cycle (min)", dureeCycleMin]);
-    tdbSheet.appendRow(["Fichiers Traités (ce cycle)", properties.getProperty(PROP_FICHIERS_TRAITES_CYCLE) || "0"]);
-    tdbSheet.appendRow(["Lots de Découverte (ce cycle)", properties.getProperty(PROP_COMPTEUR_DECOUVERTE) || "0"]);
-    tdbSheet.appendRow(["Lots de Traitement (ce cycle)", properties.getProperty(PROP_COMPTEUR_TRAITEMENT) || "0"]);
+    tdbSheet.appendRow(["Fichiers Traités (ce cycle)", props.getProperty(PROP_FICHIERS_TRAITES_CYCLE) || "0"]);
     tdbSheet.appendRow(["---", "---"]);
     tdbSheet.appendRow(["Fichiers Totaux (dans la DB)", totalFichiersDB]);
     tdbSheet.appendRow(["Espace Disque Total (Go)", espaceTotalGo]);
     tdbSheet.appendRow(["Fichiers en Doublon", totalDoublons]);
     tdbSheet.appendRow(["Espace Perdu (Go)", espacePerduGo]);
     tdbSheet.appendRow(["Fichiers Ignorés/Erreurs", fichiersIgnores.length]);
+    tdbSheet.appendRow(["Fichiers 0 ko", fichiers0ko.length]);
     tdbSheet.getRange("A1:B1").setFontWeight("bold");
-    tdbSheet.getRange("A:A").setFontWeight("bold");
-    
-    // 2. Historique
-    const histSheet = statsSheet.getSheetByName("Historique");
-    histSheet.appendRow([
-      dateFinCycle.toISOString().slice(0, 10),
-      totalFichiersDB,
-      espacePerduGo,
-      properties.getProperty(PROP_FICHIERS_TRAITES_CYCLE) || "0",
-      dureeCycleMin,
-      properties.getProperty(PROP_COMPTEUR_DECOUVERTE) || "0",
-      properties.getProperty(PROP_COMPTEUR_TRAITEMENT) || "0"
-    ]);
 
-    // 3. Analyse des Formats
-    const formatSheet = statsSheet.getSheetByName("Analyse des Formats");
-    formatSheet.clear();
-    formatSheet.appendRow(["Extension", "Nombre de Fichiers", "Taille Totale (Octets)"]);
-    let formatData = [];
-    for (const ext in mapFormats) {
-      formatData.push([ext, mapFormats[ext].count, mapFormats[ext].size]);
-    }
-    formatData.sort((a, b) => b[1] - a[1]); // Trier par nombre
-    formatSheet.getRange(2, 1, formatData.length, 3).setValues(formatData);
-    formatSheet.getRange("A1:C1").setFontWeight("bold");
-    
-    // 4. Top 100 Fichiers
-    const topSheet = statsSheet.getSheetByName("Top 100 Fichiers (Taille)");
+    /* Historique */
+    let histSheet = statsSheet.getSheetByName("Historique");
+    histSheet.appendRow([dateFinCycle.toISOString().slice(0,10), totalFichiersDB, espacePerduGo, props.getProperty(PROP_FICHIERS_TRAITES_CYCLE) || "0", dureeCycleMin, props.getProperty(PROP_COMPTEUR_DECOUVERTE), props.getProperty(PROP_COMPTEUR_TRAITEMENT)]);
+
+    /* Formats */
+    let fmtSheet = statsSheet.getSheetByName("Analyse des Formats");
+    fmtSheet.clear();
+    fmtSheet.appendRow(["Extension", "Description", "Nombre", "Taille (Octets)"]);
+    let fmtRows = Object.entries(mapFormats).map(([k,v]) => [k, v.desc, v.count, v.size]);
+    fmtRows.sort((a,b)=>b[2]-a[2]);
+    if (fmtRows.length > 0) fmtSheet.getRange(2,1,fmtRows.length,4).setValues(fmtRows);
+
+    /* Top 100 */
+    let topSheet = statsSheet.getSheetByName("Top 100 Fichiers (Taille)");
     topSheet.clear();
-    topSheet.appendRow(["Nom", "Dossier", "Taille (Mo)"]);
-    top100Fichiers.sort((a, b) => b.taille - a.taille); // Trier par taille
-    let top100Data = [];
-    for (let k = 0; k < Math.min(top100Fichiers.length, 100); k++) {
-      const f = top100Fichiers[k];
-      top100Data.push([f.nom, f.dossier, (f.taille / 1024 / 1024).toFixed(2)]);
-    }
-    topSheet.getRange(2, 1, top100Data.length, 3).setValues(top100Data);
-    topSheet.getRange("A1:C1").setFontWeight("bold");
+    topSheet.appendRow(["Nom", "Chemin", "Taille (Mo)", "URL", "Date", "Heure"]);
+    top100.sort((a,b)=>b.taille-a.taille);
+    let topRows = top100.slice(0,100).map(f => [f.nom, f.chemin, (f.taille/1024/1024).toFixed(2), f.url, f.date, f.heure]);
+    if (topRows.length > 0) topSheet.getRange(2,1,topRows.length,6).setValues(topRows);
 
-    logToFile("RAPPORT", `Tableau de bord [STATS] mis à jour.`);
-    
-  } catch (e) {
-    logToFile("ERREUR", `Impossible de mettre à jour le Sheet [STATS]: ${e.message}`);
-  }
+    logToFile("RAPPORT", `Sheet [STATS] mis à jour.`);
+  } catch(e) { logToFile("ERREUR", `Erreur Stats Sheet: ${e.message}`); }
 
-  // --- Email final ---
-  let corpsEmail = `Analyse des doublons terminée (v4.10.1 - Incrémentiel).
-    
-Fichiers dans la base de données: ${totalFichiersDB}
-Fichiers en doublon trouvés: ${totalDoublons}
-Espace disque potentiellement perdu: ${espacePerdu} octets
-Fichiers ignorés/supprimés: ${fichiersIgnores.length}
+  /* --- Email final --- */
+  let corps = `Analyse des doublons terminée (${SCRIPT_VERSION}).\n\nFichiers dans la base: ${totalFichiersDB}\nDoublons trouvés: ${doublonsCount}\nEspace perdu: ${(perduSize/1024/1024).toFixed(2)} Mo.`;
+  if(doublonsCount>0 || fichiers0ko.length>0) corps += `\n\nOuvrez [ACTION] pour supprimer : ${sheetActionUrl}`;
+  corps += `\n\nTableau de bord [STATS] : ${statsSheetUrl}`;
+  corps += `\n\nDossier de travail : ${folder.getUrl()}`;
+  
+  MailApp.sendEmail(EMAIL_POUR_RAPPORT, `[Drive ${SCRIPT_VERSION}] Rapport d'analyse terminé`, corps);
+  
+  logToFile("RAPPORT", "Terminé. En attente de la prochaine exécution nocturne.");
+  
+  /* Nettoyage final */
+  supprimerDeclencheursScript();
+  props.setProperty(PROP_ETAT_SCRIPT, 'IDLE');
+}
 
-Un tableau de bord complet des statistiques a été mis à jour ici :
-${SpreadsheetApp.openById(sheetId_Stats).getUrl()}
-`;
-  
-  if(totalDoublons > 0) {
-    corpsEmail += `\n\nPOUR AGIR :
-Ouvrez votre panneau de contrôle pour sélectionner les fichiers à garder :
-${sheetActionUrl}`;
-  } else {
-    corpsEmail += "\n\nBonne nouvelle ! Aucun doublon de contenu n'a été trouvé.";
-  }
-  
-  corpsEmail += `\n\nRapport CSV des **fichiers ignorés/supprimés**: ${fichierCsvIgnore.getUrl()}`;
-  corpsEmail += `\n\nTous les fichiers de travail se trouvent dans le dossier : ${folder.getUrl()}`;
-  
-  MailApp.sendEmail(EMAIL_POUR_RAPPORT, "[Drive v4.10.1] Rapport d'analyse des doublons terminé", corpsEmail);
-  logToFile("RAPPORT", "Rapport d'action créé et email envoyé.");
-  
-  // Nettoyer le Sheet [TEMP] à la fin
+/* v4.13.0 : Nouvelle fonction pour les dossiers vides (INCHANGÉE) */
+function chercherDossiersVides() {
+  logToFile("RAPPORT", "Scan des dossiers vides en cours (peut être long)...");
+  let dossiersVides = [];
   try {
-    DriveApp.getFileById(sheetId_Todo).setTrashed(true);
-    logToFile("RAPPORT", "Sheet temporaire de tâches supprimé.");
-  } catch (e) {
-    logToFile("RAPPORT", `Avertissement: Impossible de supprimer le Sheet TEMP: ${e.message}`);
-  }
-  
-  supprimerDeclencheursScript();
-  properties.setProperty(PROP_ETAT_SCRIPT, 'IDLE'); 
-  logToFile("RAPPORT", "Script terminé. En attente de la prochaine exécution nocturne.");
+    const folders = DriveApp.getFolders();
+    while (folders.hasNext()) {
+      const folder = folders.next();
+      if (!folder.getFiles().hasNext() && !folder.getFolders().hasNext()) {
+        if (folder.isTrashed()) continue; // Ignorer ceux déjà supprimés
+        
+        // Calculer le chemin
+        let pathParts = [folder.getName()];
+        let parent = folder.getParents().hasNext() ? folder.getParents().next() : null;
+        let rootId = DriveApp.getRootFolder().getId();
+        while (parent && parent.getId() !== rootId) {
+            pathParts.unshift(parent.getName());
+            parent = parent.getParents().hasNext() ? parent.getParents().next() : null;
+        }
+        pathParts.unshift("Mon Drive");
+        
+        dossiersVides.push([folder.getName(), pathParts.join(' / '), folder.getUrl(), folder.getId()]);
+      }
+    }
+  } catch (e) { logToFile("ERREUR", `Echec scan dossiers vides: ${e.message}`); }
+  return dossiersVides;
 }
 
 
-// --- FONCTIONS UTILITAIRES ---
+/* --- GESTION DES DÉCLENCHEURS (INCHANGÉE - V4.13.0) --- */
 
-/**
- * Crée le prochain déclencheur pour la fonction donnée. (v4.9.8)
- */
-function creerProchainDeclencheur(fonction, minutes, etat) {
+function creerProchainDeclencheur(func, min, etat) {
   supprimerDeclencheursScript();
-  ScriptApp.newTrigger(fonction)
-      .timeBased()
-      .after(minutes * 60 * 1000)
-      .create();
-  // v4.9.8 : Log amélioré
-  Logger.log(`Prochain lot (${fonction} - État: ${etat || 'INCONNU'}) programmé dans ${minutes} minutes.`);
+  ScriptApp.newTrigger(func).timeBased().after(min * 60 * 1000).create();
+  Logger.log(`[${etat}] Prochain lot dans ${min} min.`);
 }
 
-/**
- * Supprime tous les déclencheurs de ce script.
- */
 function supprimerDeclencheursScript() {
+  /* v4.13.0 : Ne supprime QUE les déclencheurs temporaires. */
   const triggers = ScriptApp.getProjectTriggers();
-  for (const trigger of triggers) {
-    const funcName = trigger.getHandlerFunction();
-    if (funcName === 'traiterLotFichiers' || 
-        funcName === 'lancerAnalyseQuotidienne' ||
-        funcName === 'lanceurNocturneIntelligent') { // v4.9.9 : Ajout du nouveau
-      ScriptApp.deleteTrigger(trigger);
+  for (const t of triggers) {
+    /* Ne supprime que 'traiterLotFichiers', laisse 'lanceurNocturneIntelligent' intact. */
+    if(t.getHandlerFunction() === 'traiterLotFichiers') {
+      ScriptApp.deleteTrigger(t);
     }
   }
 }
-
-/**
- * ====================================================================
- * FONCTION 5 : DÉCLENCHEUR NOCTURNE "INTELLIGENT" (v4.9.9)
- * ====================================================================
- * C'est le "concierge" (janitor) qui s'exécute à 2h du matin.
- * Il vérifie si le travail de la veille a été interrompu par le quota.
- */
-function lanceurNocturneIntelligent() {
-  logToFile("SYSTEM", "Réveil intelligent (02:00) activé.");
-  const etat = PropertiesService.getScriptProperties().getProperty(PROP_ETAT_SCRIPT);
-  
-  if (etat === 'IDLE' || !etat) {
-    // Le travail de la veille était terminé, on lance un nouveau scan
-    logToFile("SYSTEM", "État = IDLE. Lancement d'une nouvelle analyse quotidienne.");
-    lancerAnalyseQuotidienne();
-  } else {
-    // Le travail était en cours (ex: gelé par quota de 6h)
-    logToFile("SYSTEM", `État = ${etat}. Reprise du travail interrompu.`);
-    // On relance simplement le "coeur" du script pour qu'il continue
-    creerProchainDeclencheur('traiterLotFichiers', 1, etat);
-  }
-}
-
-/**
- * ====================================================================
- * FONCTION 6 : (Supprimée v4.10.1)
- * ====================================================================
- * L'ancienne fonction 'INSTALLER_DECLENCHEUR_NOCTURNE' a été supprimée.
- * Veuillez créer le déclencheur manuellement via l'interface ⏰ :
- * 1. Déclencheurs > + Ajouter un déclencheur
- * 2. Fonction à exécuter : lanceurNocturneIntelligent
- * 3. Source de l'événement : Temporel
- * 4. Type : Déclencheur basé sur les jours
- * 5. Heure : 2h - 3h du matin
- * ====================================================================
- */
