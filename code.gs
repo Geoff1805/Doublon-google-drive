@@ -47,7 +47,7 @@ const PROP_SHEET_ID_LOG = 'SHEET_ID_LOG';
 const PROP_SHEET_ID_STATS = 'SHEET_ID_STATS';
 const PROP_SHEET_ID_ACTION = 'SHEET_ID_ACTION';
 const PROP_DOSSIER_ORPHELINS_ID = 'DOSSIER_ORPHELINS_ID';
-const PROP_CHANGE_TOKEN = 'CHANGE_TOKEN'; /* (V4.15.0) */
+const PROP_SYNC_TOKEN = 'SYNC_TOKEN'; /* (V4.15.0) */
 
 /* Compteurs de boucle */
 const PROP_COMPTEUR_DECOUVERTE = 'COMPTEUR_DECOUVERTE';
@@ -226,7 +226,7 @@ function logiqueDeSynchronisationDesChangements() {
   props.setProperty(PROP_COMPTEUR_DECOUVERTE, compteur.toString());
 
   const sheetTodo = SpreadsheetApp.openById(props.getProperty(PROP_SHEET_ID_TODO)).getSheets()[0];
-  let token = props.getProperty(PROP_CHANGE_TOKEN);
+  let token = props.getProperty(PROP_SYNC_TOKEN);
   let nouvellesTaches = [];
   let idsASupprimer = [];
 
@@ -298,7 +298,7 @@ function logiqueDeSynchronisationDesChangements() {
       
       /* Si le temps est écoulé, on sauvegarde le token de cette page */
       if ((new Date().getTime() - startTime) / 1000 > TEMPS_MAX_EXECUTION_SECONDES) {
-        props.setProperty(PROP_CHANGE_TOKEN, pageToken);
+        props.setProperty(PROP_SYNC_TOKEN, pageToken);
         pageToken = null; /* Arrêter la boucle */
       } else {
         /* Sinon, on passe à la page suivante (le token sera le nextPageToken s'il existe) */
@@ -323,7 +323,7 @@ function logiqueDeSynchronisationDesChangements() {
     } else {
       /* C'est terminé, on passe au traitement */
       logToFile("DECOUVERTE_SYNCHRO", `Phase DECOUVERTE (${SCRIPT_VERSION}) terminée.`);
-      props.setProperty(PROP_CHANGE_TOKEN, changements.newStartPageToken); /* Sauvegarde le token final */
+      props.setProperty(PROP_SYNC_TOKEN, changements.newStartPageToken); /* Sauvegarde le token final */
       props.setProperty(PROP_ETAT_SCRIPT, 'TRAITEMENT');
       creerProchainDeclencheur('traiterLotFichiers', MINUTES_ENTRE_LOTS, 'TRAITEMENT');
     }
